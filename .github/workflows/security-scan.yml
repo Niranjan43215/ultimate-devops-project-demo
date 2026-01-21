@@ -1,0 +1,38 @@
+name: "Python Security Scan"
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  python-analysis:
+    name: Python Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Initialize CodeQL for Python specifically
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          # Using 'security-and-quality' to catch both bugs AND messy code
+          queries: security-and-quality 
+
+      # 2. Perform the Analysis (No Autobuild needed for Python)
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/perform-analysis@v3
+
+      # 3. Optional: Scan for Secrets (API Keys, Passwords)
+      # This uses a standard Python-based secret scanner
+      - name: Secret Scanner
+        uses: secret-scanner/action@0.0.2
+        if: always() # Ensure this runs even if the code scan fails
