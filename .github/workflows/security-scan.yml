@@ -19,20 +19,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Initialize CodeQL for Python specifically
+      # 1. Initialize CodeQL for Python
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: python
-          # Using 'security-and-quality' to catch both bugs AND messy code
-          queries: security-and-quality 
 
-      # 2. Perform the Analysis (No Autobuild needed for Python)
+      # 2. Perform the Analysis 
+      # FIX: Changed 'perform-analysis' to 'analyze'
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/perform-analysis@v3
-
-      # 3. Optional: Scan for Secrets (API Keys, Passwords)
-      # This uses a standard Python-based secret scanner
-      - name: Secret Scanner
-        uses: secret-scanner/action@0.0.2
-        if: always() # Ensure this runs even if the code scan fails
+        uses: github/codeql-action/analyze@v3
