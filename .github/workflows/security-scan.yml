@@ -19,13 +19,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Initialize CodeQL for Python
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: python
 
-      # 2. Perform the Analysis 
-      # FIX: Changed 'perform-analysis' to 'analyze'
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
