@@ -6,4 +6,4 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Run BuildErrors
-        run: docker run --rm -v ${{ github.workspace }}:/src gramener/builderror
+        run: docker run --rm -v ${{ github.workspace }}:/src gramener/builderrors
