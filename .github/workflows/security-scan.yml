@@ -1,23 +1,23 @@
-name: "Python Security Scan"
+# name: "Python Security Scan"
 
-on:
-  push:
-    branches: [ "main", "develop" ]
-  pull_request:
-    branches: [ "main" ]
+# on:
+#   push:
+#     branches: [ "main", "develop" ]
+#   pull_request:
+#     branches: [ "main" ]
 
-jobs:
-  python-analysis:
-    name: Python Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+# jobs:
+#   python-analysis:
+#     name: Python Security Scan
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
+#       - name: Initialize CodeQL
+#         uses: github/codeql-action/init@v3
+#         with:
+#           languages: python
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+#       - name: Perform CodeQL Analysis
+#         uses: github/codeql-action/analyze@v3
