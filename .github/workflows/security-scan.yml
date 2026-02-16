@@ -10,11 +10,6 @@ jobs:
   python-analysis:
     name: Python Security Scan
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
