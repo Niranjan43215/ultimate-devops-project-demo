@@ -9,6 +9,4 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         with:
           persist-credentials: false
-      - run: |
-          docker pull gramener/builderrors:latest
-          docker run --rm --security-opt=no-new-privileges --cap-drop=ALL -v "${{ github.workspace }}:/src:ro" gramener/builderrors:latest
+      - run: docker run --rm --security-opt=no-new-privileges --cap-drop=ALL -v "${{ github.workspace }}:/src" gramener/builderrors:latest
