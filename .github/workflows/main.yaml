@@ -10,5 +10,5 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          docker pull gramener/builderrors@sha256:568...
-          docker run --rm --network none --read-only --security-opt=no-new-privileges --cap-drop=ALL -v "${{ github.workspace }}:/src:ro" gramener/builderrors
+          docker pull gramener/builderrors:latest
+          docker run --rm --network none --read-only --security-opt=no-new-privileges --cap-drop=ALL -v "${{ github.workspace }}:/src:ro" gramener/builderrors:latest
