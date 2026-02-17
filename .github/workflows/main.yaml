@@ -1,12 +1,13 @@
-name: Secure Quality Scan
+name: Code Quality Scan
 on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  quality-scan:
-    runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         with:
           persist-credentials: false
-      - run: docker run --rm --security-opt=no-new-privileges --cap-drop=ALL -v "${{ github.workspace }}:/src" gramener/builderrors:latest
+      - name: Run BuildErrors
+        run: docker run --rm -v ${{ github.workspace }}:/src gramener/builderrors
