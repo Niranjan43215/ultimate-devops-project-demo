@@ -22,4 +22,20 @@ jobs:
       - name: Install Dependencies
         run: pip install transformers torch pandas
       - name: Run Model Analysis
-        run: python model_runner.py
+        run: |
+          cat > model_runner.py << 'EOF'
+          from transformers import pipeline
+          import os
+          
+          classifier = pipeline("text-classification", model="microsoft/codebert-base")
+          
+          for root, dirs, files in os.walk("."):
+              for file in files:
+                  if file.endswith((".py", ".js", ".go", ".java")):
+                      filepath = os.path.join(root, file)
+                      with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                          code = f.read()[:512]
+                          result = classifier(code)
+                          print(f"{filepath}: {result}")
+          EOF
+          python model_runner.py
