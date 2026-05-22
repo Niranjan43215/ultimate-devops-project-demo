@@ -2,193 +2,217 @@
 
 name: product-catalog-ci
 
-on: 
+on:
     pull_request:
         branches:
-        - main
-    jobs:
- # Stage 1: Code Quality & Security Scanning with Gramener BuildErrorss
- code-analysis:
- name: Stage 1 - Code Quality Analysis
- runs-on: ubuntu-latest
- outputs:
- quality-passed: ${{ steps.quality-check.outputs.passed }}
- 
- steps:
- - name: Checkout Code
- uses: actions/checkout@v4
- with:
- fetch-depth: 0
+            - main
+    push:
+        branches:
+            - ci-test
 
- - name: Pipeline Trigger Confirmation
- run: |
- echo " Stage 1 Pipeline Triggered Successfully!"
- echo "Branch: ${{ github.ref }}"
- echo "Commit: ${{ github.sha }}"
- echo "Event: ${{ github.event_name }}"
- echo "Starting Code Quality Analysis..."
+jobs:
+    code-analysis:
+        name: Stage 1 - Code Quality Analysis
+        runs-on: ubuntu-latest
+        outputs:
+            quality-passed: ${{ steps.quality-check.outputs.passed }}
 
- - name: Set up Python 3.9
- uses: actions/setup-python@v4
- with:
- python-version: '3.9'
+        steps:
+            - name: Checkout Code
+                uses: actions/checkout@v4
+                with:
+                    fetch-depth: 0
 
- - name: Install Project Dependencies
- run: |
- echo "Installing Python dependencies..."
- cd backend
- pip install --no-cache-dir -r requirements.txt
- echo "Dependencies installed successfully"
+            - name: Pipeline Trigger Confirmation
+                run: |
+                    echo " Stage 1 Pipeline Triggered Successfully!"
+                    echo "Branch: ${{ github.ref }}"
+                    echo "Commit: ${{ github.sha }}"
+                    echo "Event: ${{ github.event_name }}"
+                    echo "Starting Code Quality Analysis..."
 
- - name: Run Gramener BuildErrors Analysis - Reports Service
- run: |
- echo "Running Gramener BuildErrors on Reports Service..."
- 
- # Check if reports service directory exists
- if [ -d "backend/services/reports" ]; then
- echo "Reports service directory found"
- 
- docker run --rm \
- -v ${{ github.workspace }}:/workspace \
- -w /workspace \
- gramener/builderrors \
- --path backend/services/reports \
- --format json \
- --output builderrors-report.json \
- --include-patterns "*.py" \
- --severity-threshold medium || echo "BuildErrors completed with findings"
- 
- echo "Reports service analysis completed"
- else
- echo "Reports service directory not found, creating empty report"
- echo '{"issues": []}' > builderrors-report.json
- fi
+            - name: Set up Python 3.9
+                uses: actions/setup-python@v4
+                with:
+                    python-version: '3.9'
 
- - name: Run Gramener BuildErrors Analysis - Shared Code
- run: |
- echo "Running Gramener BuildErrors on Shared Backend Code..."
- 
- # Check if shared directory exists
- if [ -d "backend/shared" ]; then
- echo "Shared backend directory found"
- 
- docker run --rm \
- -v ${{ github.workspace }}:/workspace \
- -w /workspace \
- gramener/builderrors \
- --path backend/shared \
- --format json \
- --output builderrors-shared.json \
- --include-patterns "*.py" \
- --severity-threshold medium || echo "BuildErrors completed with findings"
- 
- echo "Shared code analysis completed"
- else
- echo "Shared backend directory not found,creating empty report"
- echo '{"issues": []}' > builderrors-shared.json
- fi
+            - name: Ensure tools (`jq` and `docker`) are available
+                run: |
+                    echo "Checking for jq and docker..."
+                    if ! command -v jq >/dev/null 2>&1; then
+                        echo "jq not found: installing jq"
+                        sudo apt-get update || true
+                        sudo apt-get install -y jq || true
+                    else
+                        echo "jq present"
+                    fi
+                    if ! command -v docker >/dev/null 2>&1; then
+                        echo "docker not found on runner; docker-based analysis will be skipped when needed"
+                        touch /tmp/docker-missing
+                    else
+                        echo "docker present"
+                    fi
 
- - name: Calculate Code Quality Score
- id: quality-check
- run: |
- echo "Calculating code quality score..."
- 
- # Initialize counters
- CRITICAL=0
- HIGH=0
- MEDIUM=0
- TOTAL=0
- 
- # Process reports if they exist
- for report in builderrors-report.json builderrors-shared.json; do
- if [ -f "$report" ]; then
- echo "Processing $report..."
- 
- # Use jq to parse JSON safely
- CRITICAL=$((CRITICAL + $(jq '[.issues[]? | select(.severity == "critical")] | length' "$report" 2>/dev/null || echo 0)))
- HIGH=$((HIGH + $(jq '[.issues[]? | select(.severity == "high")] | length' "$report" 2>/dev/null || echo 0)))
- MEDIUM=$((MEDIUM + $(jq '[.issues[]? | select(.severity == "medium")] | length' "$report" 2>/dev/null || echo 0)))
- TOTAL=$((TOTAL + $(jq '[.issues[]?] | length' "$report" 2>/dev/null || echo 0)))
- else
- echo "Report $report not found"
- fi
- done
- 
- # Calculate quality score: 100 - (critical*25 + high*15 + medium*5)
- SCORE=$((100 - CRITICAL*25 - HIGH*15 - MEDIUM*5))
- SCORE=$((SCORE < 0 ? 0 : SCORE))
- 
- echo " Code Quality Metrics:"
- echo " Critical Issues: $CRITICAL"
- echo " High Issues: $HIGH" 
- echo " Medium Issues: $MEDIUM"
- echo " Total Issues: $TOTAL"
- echo " Quality Score: ${SCORE}%"
- # Create GitHub summary
- cat >> $GITHUB_STEP_SUMMARY << EOF
- ## Stage 1 - Code Quality Report
- 
- | Severity | Count |
- |----------|-------|
- | Critical | $CRITICAL |
- | High | $HIGH |
- | Medium | $MEDIUM |
- | **Total** | **$TOTAL** |
- 
- ### Quality Score: ${SCORE}%
- ### Threshold: 80%
- EOF
- 
- # Check if score meets threshold
- if [ $SCORE -lt 80 ]; then
- echo "Code quality score ${SCORE}% is below 80% threshold"
- echo " Please fix critical and high severity issues before proceeding"
- echo "passed=false" >> $GITHUB_OUTPUT
- 
- cat >> $GITHUB_STEP_SUMMARY << EOF
- 
- ### Result: FAILED
- Quality score is below the required 80% threshold.
- EOF
- 
- exit 1
- else
- echo "Code quality score ${SCORE}% passed 80% threshold"
- echo "Ready to proceed to next stage"
- echo "passed=true" >> $GITHUB_OUTPUT
- 
- cat >> $GITHUB_STEP_SUMMARY << EOF
- 
- ### Result: PASSED
- Quality score meets the required 80% threshold. Ready for Stage 2!
- EOF
- fi
+            - name: Install Project Dependencies
+                run: |
+                    echo "Installing Python dependencies if present..."
+                    if [ -f backend/requirements.txt ]; then
+                        echo "requirements.txt found, installing..."
+                        cd backend
+                        pip install --no-cache-dir -r requirements.txt
+                        cd -
+                        echo "Dependencies installed successfully"
+                    else
+                        echo "No backend/requirements.txt found — skipping pip install"
+                    fi
 
- - name: Upload BuildErrors Reports
- uses: actions/upload-artifact@v4
- if: always()
- with:
- name: builderrors-reports-stage1
- path: |
- builderrors-report.json
- builderrors-shared.json
- retention-days: 30
+            - name: Run Gramener BuildErrors Analysis - Reports Service
+                run: |
+                    echo "Running Gramener BuildErrors on Reports Service..."
 
- - name: Stage 1 Completion Summary
- if: always()
- run: |
- echo "🏁 Stage 1 - Code Quality Analysis Completed"
- echo ""
- if [ "${{ steps.quality-check.outputs.passed }}" == "true" ]; then
- echo "Status: PASSED"
- echo "Ready for Stage 2: Docker Build"
- else
- echo " Status: FAILED"
- echo "Fix code quality issues before proceeding"
- fi
- echo ""
- echo " Next Steps:"
- echo "1. Review code quality report above"
- echo "2. Fix any critical/high severity issues"
- echo "3. If passed, proceed to add Stage 2"
+                    if [ -d "backend/services/reports" ]; then
+                        echo "Reports service directory found"
+                        if command -v docker >/dev/null 2>&1 && [ ! -f /tmp/docker-missing ]; then
+                            docker run --rm \
+                                -v ${{ github.workspace }}:/workspace \
+                                -w /workspace \
+                                gramener/builderrors \
+                                --path backend/services/reports \
+                                --format json \
+                                --output builderrors-report.json \
+                                --include-patterns "*.py" \
+                                --severity-threshold medium || echo "BuildErrors completed with findings"
+                            echo "Reports service analysis completed"
+                        else
+                            echo "Docker not available — creating empty report for reports service"
+                            echo '{"issues": []}' > builderrors-report.json
+                        fi
+                    else
+                        echo "Reports service directory not found, creating empty report"
+                        echo '{"issues": []}' > builderrors-report.json
+                    fi
+
+            - name: Run Gramener BuildErrors Analysis - Shared Code
+                run: |
+                    echo "Running Gramener BuildErrors on Shared Backend Code..."
+
+                    if [ -d "backend/shared" ]; then
+                        echo "Shared backend directory found"
+                        if command -v docker >/dev/null 2>&1 && [ ! -f /tmp/docker-missing ]; then
+                            docker run --rm \
+                                -v ${{ github.workspace }}:/workspace \
+                                -w /workspace \
+                                gramener/builderrors \
+                                --path backend/shared \
+                                --format json \
+                                --output builderrors-shared.json \
+                                --include-patterns "*.py" \
+                                --severity-threshold medium || echo "BuildErrors completed with findings"
+                            echo "Shared code analysis completed"
+                        else
+                            echo "Docker not available — creating empty report for shared backend"
+                            echo '{"issues": []}' > builderrors-shared.json
+                        fi
+                    else
+                        echo "Shared backend directory not found,creating empty report"
+                        echo '{"issues": []}' > builderrors-shared.json
+                    fi
+
+            - name: Calculate Code Quality Score
+                id: quality-check
+                run: |
+                    echo "Calculating code quality score..."
+
+                    CRITICAL=0
+                    HIGH=0
+                    MEDIUM=0
+                    TOTAL=0
+
+                    for report in builderrors-report.json builderrors-shared.json; do
+                        if [ -f "$report" ]; then
+                            echo "Processing $report..."
+                            CRITICAL=$((CRITICAL + $(jq '[.issues[]? | select(.severity == "critical")] | length' "$report" 2>/dev/null || echo 0)))
+                            HIGH=$((HIGH + $(jq '[.issues[]? | select(.severity == "high")] | length' "$report" 2>/dev/null || echo 0)))
+                            MEDIUM=$((MEDIUM + $(jq '[.issues[]? | select(.severity == "medium")] | length' "$report" 2>/dev/null || echo 0)))
+                            TOTAL=$((TOTAL + $(jq '[.issues[]?] | length' "$report" 2>/dev/null || echo 0)))
+                        else
+                            echo "Report $report not found"
+                        fi
+                    done
+
+                    SCORE=$((100 - CRITICAL*25 - HIGH*15 - MEDIUM*5))
+                    SCORE=$((SCORE < 0 ? 0 : SCORE))
+
+                    echo " Code Quality Metrics:"
+                    echo " Critical Issues: $CRITICAL"
+                    echo " High Issues: $HIGH"
+                    echo " Medium Issues: $MEDIUM"
+                    echo " Total Issues: $TOTAL"
+                    echo " Quality Score: ${SCORE}%"
+
+                    cat >> $GITHUB_STEP_SUMMARY << EOF
+## Stage 1 - Code Quality Report
+
+| Severity | Count |
+|----------|-------|
+| Critical | $CRITICAL |
+| High | $HIGH |
+| Medium | $MEDIUM |
+| **Total** | **$TOTAL** |
+
+### Quality Score: ${SCORE}%
+### Threshold: 80%
+EOF
+
+                    if [ $SCORE -lt 80 ]; then
+                        echo "Code quality score ${SCORE}% is below 80% threshold"
+                        echo " Please fix critical and high severity issues before proceeding"
+                        echo "passed=false" >> $GITHUB_OUTPUT
+
+                        cat >> $GITHUB_STEP_SUMMARY << EOF
+
+### Result: FAILED
+Quality score is below the required 80% threshold.
+EOF
+
+                        exit 1
+                    else
+                        echo "Code quality score ${SCORE}% passed 80% threshold"
+                        echo "Ready to proceed to next stage"
+                        echo "passed=true" >> $GITHUB_OUTPUT
+
+                        cat >> $GITHUB_STEP_SUMMARY << EOF
+
+### Result: PASSED
+Quality score meets the required 80% threshold. Ready for Stage 2!
+EOF
+                    fi
+
+            - name: Upload BuildErrors Reports
+                if: always()
+                uses: actions/upload-artifact@v4
+                with:
+                    name: builderrors-reports-stage1
+                    path: |
+                        builderrors-report.json
+                        builderrors-shared.json
+                    retention-days: 30
+
+            - name: Stage 1 Completion Summary
+                if: always()
+                run: |
+                    echo "🏁 Stage 1 - Code Quality Analysis Completed"
+                    echo ""
+                    if [ "${{ steps.quality-check.outputs.passed }}" == "true" ]; then
+                        echo "Status: PASSED"
+                        echo "Ready for Stage 2: Docker Build"
+                    else
+                        echo " Status: FAILED"
+                        echo "Fix code quality issues before proceeding"
+                    fi
+                    echo ""
+                    echo " Next Steps:"
+                    echo "1. Review code quality report above"
+                    echo "2. Fix any critical/high severity issues"
+                    echo "3. If passed, proceed to add Stage 2"
 
