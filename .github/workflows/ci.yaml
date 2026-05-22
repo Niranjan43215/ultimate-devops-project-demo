@@ -1,218 +1,106 @@
-# CI for Product Catalog Service
-
 name: product-catalog-ci
 
 on:
-    pull_request:
-        branches:
-            - main
-    push:
-        branches:
-            - ci-test
+  push:
+    branches:
+      - ci-test
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: product-catalog
+  SERVICE_PATH: src/product-catalog
+
+permissions:
+  contents: read
 
 jobs:
-    code-analysis:
-        name: Stage 1 - Code Quality Analysis
-        runs-on: ubuntu-latest
-        outputs:
-            quality-passed: ${{ steps.quality-check.outputs.passed }}
+  code-scan:
+    name: Stage 1: Checkout + Code Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-        steps:
-            - name: Checkout Code
-                uses: actions/checkout@v4
-                with:
-                    fetch-depth: 0
+      - name: Run Gramener BuildErrors
+        run: |
+          echo "Running Gramener BuildErrors on $SERVICE_PATH"
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            gramener/builderrors \
+            --path "$SERVICE_PATH" \
+            --format json \
+            --output builderrors-product-catalog.json \
+            --include-patterns "*"
 
-            - name: Pipeline Trigger Confirmation
-                run: |
-                    echo " Stage 1 Pipeline Triggered Successfully!"
-                    echo "Branch: ${{ github.ref }}"
-                    echo "Commit: ${{ github.sha }}"
-                    echo "Event: ${{ github.event_name }}"
-                    echo "Starting Code Quality Analysis..."
+      - name: Upload BuildErrors report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: builderrors-report
+          path: builderrors-product-catalog.json
 
-            - name: Set up Python 3.9
-                uses: actions/setup-python@v4
-                with:
-                    python-version: '3.9'
+  build-and-scan-image:
+    name: Stage 2/3/4: Build Docker image and scan with Snyk
+    needs: code-scan
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-            - name: Ensure tools (`jq` and `docker`) are available
-                run: |
-                    echo "Checking for jq and docker..."
-                    if ! command -v jq >/dev/null 2>&1; then
-                        echo "jq not found: installing jq"
-                        sudo apt-get update || true
-                        sudo apt-get install -y jq || true
-                    else
-                        echo "jq present"
-                    fi
-                    if ! command -v docker >/dev/null 2>&1; then
-                        echo "docker not found on runner; docker-based analysis will be skipped when needed"
-                        touch /tmp/docker-missing
-                    else
-                        echo "docker present"
-                    fi
+      - name: Set Docker image metadata
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
+          echo "IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}" >> $GITHUB_ENV
 
-            - name: Install Project Dependencies
-                run: |
-                    echo "Installing Python dependencies if present..."
-                    if [ -f backend/requirements.txt ]; then
-                        echo "requirements.txt found, installing..."
-                        cd backend
-                        pip install --no-cache-dir -r requirements.txt
-                        cd -
-                        echo "Dependencies installed successfully"
-                    else
-                        echo "No backend/requirements.txt found — skipping pip install"
-                    fi
+      - name: Build Docker image
+        run: |
+          docker build -t "$IMAGE_URI" "$SERVICE_PATH"
 
-            - name: Run Gramener BuildErrors Analysis - Reports Service
-                run: |
-                    echo "Running Gramener BuildErrors on Reports Service..."
+      - name: Set up Node.js for Snyk
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-                    if [ -d "backend/services/reports" ]; then
-                        echo "Reports service directory found"
-                        if command -v docker >/dev/null 2>&1 && [ ! -f /tmp/docker-missing ]; then
-                            docker run --rm \
-                                -v ${{ github.workspace }}:/workspace \
-                                -w /workspace \
-                                gramener/builderrors \
-                                --path backend/services/reports \
-                                --format json \
-                                --output builderrors-report.json \
-                                --include-patterns "*.py" \
-                                --severity-threshold medium || echo "BuildErrors completed with findings"
-                            echo "Reports service analysis completed"
-                        else
-                            echo "Docker not available — creating empty report for reports service"
-                            echo '{"issues": []}' > builderrors-report.json
-                        fi
-                    else
-                        echo "Reports service directory not found, creating empty report"
-                        echo '{"issues": []}' > builderrors-report.json
-                    fi
+      - name: Install Snyk CLI
+        run: npm install -g snyk
 
-            - name: Run Gramener BuildErrors Analysis - Shared Code
-                run: |
-                    echo "Running Gramener BuildErrors on Shared Backend Code..."
+      - name: Authenticate to Snyk
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "SNYK_TOKEN is not set"
+            exit 1
+          fi
+          echo "$SNYK_TOKEN" | snyk auth --stdin
 
-                    if [ -d "backend/shared" ]; then
-                        echo "Shared backend directory found"
-                        if command -v docker >/dev/null 2>&1 && [ ! -f /tmp/docker-missing ]; then
-                            docker run --rm \
-                                -v ${{ github.workspace }}:/workspace \
-                                -w /workspace \
-                                gramener/builderrors \
-                                --path backend/shared \
-                                --format json \
-                                --output builderrors-shared.json \
-                                --include-patterns "*.py" \
-                                --severity-threshold medium || echo "BuildErrors completed with findings"
-                            echo "Shared code analysis completed"
-                        else
-                            echo "Docker not available — creating empty report for shared backend"
-                            echo '{"issues": []}' > builderrors-shared.json
-                        fi
-                    else
-                        echo "Shared backend directory not found,creating empty report"
-                        echo '{"issues": []}' > builderrors-shared.json
-                    fi
+      - name: Scan Docker image with Snyk
+        run: |
+          snyk container test "$IMAGE_URI" --dockerfile "$SERVICE_PATH/Dockerfile"
 
-            - name: Calculate Code Quality Score
-                id: quality-check
-                run: |
-                    echo "Calculating code quality score..."
+  push-to-ecr:
+    name: Stage 5: Push Docker image to ECR
+    needs: build-and-scan-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-                    CRITICAL=0
-                    HIGH=0
-                    MEDIUM=0
-                    TOTAL=0
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-                    for report in builderrors-report.json builderrors-shared.json; do
-                        if [ -f "$report" ]; then
-                            echo "Processing $report..."
-                            CRITICAL=$((CRITICAL + $(jq '[.issues[]? | select(.severity == "critical")] | length' "$report" 2>/dev/null || echo 0)))
-                            HIGH=$((HIGH + $(jq '[.issues[]? | select(.severity == "high")] | length' "$report" 2>/dev/null || echo 0)))
-                            MEDIUM=$((MEDIUM + $(jq '[.issues[]? | select(.severity == "medium")] | length' "$report" 2>/dev/null || echo 0)))
-                            TOTAL=$((TOTAL + $(jq '[.issues[]?] | length' "$report" 2>/dev/null || echo 0)))
-                        else
-                            echo "Report $report not found"
-                        fi
-                    done
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
 
-                    SCORE=$((100 - CRITICAL*25 - HIGH*15 - MEDIUM*5))
-                    SCORE=$((SCORE < 0 ? 0 : SCORE))
-
-                    echo " Code Quality Metrics:"
-                    echo " Critical Issues: $CRITICAL"
-                    echo " High Issues: $HIGH"
-                    echo " Medium Issues: $MEDIUM"
-                    echo " Total Issues: $TOTAL"
-                    echo " Quality Score: ${SCORE}%"
-
-                    cat >> $GITHUB_STEP_SUMMARY << EOF
-## Stage 1 - Code Quality Report
-
-| Severity | Count |
-|----------|-------|
-| Critical | $CRITICAL |
-| High | $HIGH |
-| Medium | $MEDIUM |
-| **Total** | **$TOTAL** |
-
-### Quality Score: ${SCORE}%
-### Threshold: 80%
-EOF
-
-                    if [ $SCORE -lt 80 ]; then
-                        echo "Code quality score ${SCORE}% is below 80% threshold"
-                        echo " Please fix critical and high severity issues before proceeding"
-                        echo "passed=false" >> $GITHUB_OUTPUT
-
-                        cat >> $GITHUB_STEP_SUMMARY << EOF
-
-### Result: FAILED
-Quality score is below the required 80% threshold.
-EOF
-
-                        exit 1
-                    else
-                        echo "Code quality score ${SCORE}% passed 80% threshold"
-                        echo "Ready to proceed to next stage"
-                        echo "passed=true" >> $GITHUB_OUTPUT
-
-                        cat >> $GITHUB_STEP_SUMMARY << EOF
-
-### Result: PASSED
-Quality score meets the required 80% threshold. Ready for Stage 2!
-EOF
-                    fi
-
-            - name: Upload BuildErrors Reports
-                if: always()
-                uses: actions/upload-artifact@v4
-                with:
-                    name: builderrors-reports-stage1
-                    path: |
-                        builderrors-report.json
-                        builderrors-shared.json
-                    retention-days: 30
-
-            - name: Stage 1 Completion Summary
-                if: always()
-                run: |
-                    echo "🏁 Stage 1 - Code Quality Analysis Completed"
-                    echo ""
-                    if [ "${{ steps.quality-check.outputs.passed }}" == "true" ]; then
-                        echo "Status: PASSED"
-                        echo "Ready for Stage 2: Docker Build"
-                    else
-                        echo " Status: FAILED"
-                        echo "Fix code quality issues before proceeding"
-                    fi
-                    echo ""
-                    echo " Next Steps:"
-                    echo "1. Review code quality report above"
-                    echo "2. Fix any critical/high severity issues"
-                    echo "3. If passed, proceed to add Stage 2"
-
+      - name: Push Docker image to ECR
+        run: |
+          docker push "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${GITHUB_SHA}"
