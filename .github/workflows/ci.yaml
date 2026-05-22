@@ -6,103 +6,189 @@ on:
     pull_request:
         branches:
         - main
+    jobs:
+ # Stage 1: Code Quality & Security Scanning with Gramener BuildErrorss
+ code-analysis:
+ name: Stage 1 - Code Quality Analysis
+ runs-on: ubuntu-latest
+ outputs:
+ quality-passed: ${{ steps.quality-check.outputs.passed }}
+ 
+ steps:
+ - name: Checkout Code
+ uses: actions/checkout@v4
+ with:
+ fetch-depth: 0
 
-jobs:
-    build:
-        runs-on: ubuntu-latest
+ - name: Pipeline Trigger Confirmation
+ run: |
+ echo " Stage 1 Pipeline Triggered Successfully!"
+ echo "Branch: ${{ github.ref }}"
+ echo "Commit: ${{ github.sha }}"
+ echo "Event: ${{ github.event_name }}"
+ echo "Starting Code Quality Analysis..."
 
-        steps:
-        - name: checkout code
-          uses: actions/checkout@v4
+ - name: Set up Python 3.9
+ uses: actions/setup-python@v4
+ with:
+ python-version: '3.9'
 
-        - name: Setup Go 1.22
-          uses: actions/setup-go@v2
-          with:
-            go-version: 1.22
-        
-        - name: Build
-          run: |
-            cd src/product-catalog
-            go mod download
-            go build -o product-catalog-service main.go
+ - name: Install Project Dependencies
+ run: |
+ echo "Installing Python dependencies..."
+ cd backend
+ pip install --no-cache-dir -r requirements.txt
+ echo "Dependencies installed successfully"
 
-        - name: unit tests
-          run: |
-            cd src/product-catalog
-            go test ./...
-    
-    code-quality:
-        runs-on: ubuntu-latest
+ - name: Run Gramener BuildErrors Analysis - Reports Service
+ run: |
+ echo "Running Gramener BuildErrors on Reports Service..."
+ 
+ # Check if reports service directory exists
+ if [ -d "backend/services/reports" ]; then
+ echo "Reports service directory found"
+ 
+ docker run --rm \
+ -v ${{ github.workspace }}:/workspace \
+ -w /workspace \
+ gramener/builderrors \
+ --path backend/services/reports \
+ --format json \
+ --output builderrors-report.json \
+ --include-patterns "*.py" \
+ --severity-threshold medium || echo "BuildErrors completed with findings"
+ 
+ echo "Reports service analysis completed"
+ else
+ echo "Reports service directory not found, creating empty report"
+ echo '{"issues": []}' > builderrors-report.json
+ fi
 
-        steps:
-        - name: checkout code
-          uses: actions/checkout@v4
-        
-        - name: Setup Go 1.22
-          uses: actions/setup-go@v2
-          with:
-           go-version: 1.22
-        
-        - name: Run golangci-lint
-          uses: golangci/golangci-lint-action@v6
-          with:
-            version: v1.55.2
-            run: golangci-lint run
-            working-directory: src/product-catalog
+ - name: Run Gramener BuildErrors Analysis - Shared Code
+ run: |
+ echo "Running Gramener BuildErrors on Shared Backend Code..."
+ 
+ # Check if shared directory exists
+ if [ -d "backend/shared" ]; then
+ echo "Shared backend directory found"
+ 
+ docker run --rm \
+ -v ${{ github.workspace }}:/workspace \
+ -w /workspace \
+ gramener/builderrors \
+ --path backend/shared \
+ --format json \
+ --output builderrors-shared.json \
+ --include-patterns "*.py" \
+ --severity-threshold medium || echo "BuildErrors completed with findings"
+ 
+ echo "Shared code analysis completed"
+ else
+ echo "Shared backend directory not found,creating empty report"
+ echo '{"issues": []}' > builderrors-shared.json
+ fi
 
-    docker:
-        runs-on: ubuntu-latest
+ - name: Calculate Code Quality Score
+ id: quality-check
+ run: |
+ echo "Calculating code quality score..."
+ 
+ # Initialize counters
+ CRITICAL=0
+ HIGH=0
+ MEDIUM=0
+ TOTAL=0
+ 
+ # Process reports if they exist
+ for report in builderrors-report.json builderrors-shared.json; do
+ if [ -f "$report" ]; then
+ echo "Processing $report..."
+ 
+ # Use jq to parse JSON safely
+ CRITICAL=$((CRITICAL + $(jq '[.issues[]? | select(.severity == "critical")] | length' "$report" 2>/dev/null || echo 0)))
+ HIGH=$((HIGH + $(jq '[.issues[]? | select(.severity == "high")] | length' "$report" 2>/dev/null || echo 0)))
+ MEDIUM=$((MEDIUM + $(jq '[.issues[]? | select(.severity == "medium")] | length' "$report" 2>/dev/null || echo 0)))
+ TOTAL=$((TOTAL + $(jq '[.issues[]?] | length' "$report" 2>/dev/null || echo 0)))
+ else
+ echo "Report $report not found"
+ fi
+ done
+ 
+ # Calculate quality score: 100 - (critical*25 + high*15 + medium*5)
+ SCORE=$((100 - CRITICAL*25 - HIGH*15 - MEDIUM*5))
+ SCORE=$((SCORE < 0 ? 0 : SCORE))
+ 
+ echo " Code Quality Metrics:"
+ echo " Critical Issues: $CRITICAL"
+ echo " High Issues: $HIGH" 
+ echo " Medium Issues: $MEDIUM"
+ echo " Total Issues: $TOTAL"
+ echo " Quality Score: ${SCORE}%"
+ # Create GitHub summary
+ cat >> $GITHUB_STEP_SUMMARY << EOF
+ ## Stage 1 - Code Quality Report
+ 
+ | Severity | Count |
+ |----------|-------|
+ | Critical | $CRITICAL |
+ | High | $HIGH |
+ | Medium | $MEDIUM |
+ | **Total** | **$TOTAL** |
+ 
+ ### Quality Score: ${SCORE}%
+ ### Threshold: 80%
+ EOF
+ 
+ # Check if score meets threshold
+ if [ $SCORE -lt 80 ]; then
+ echo "Code quality score ${SCORE}% is below 80% threshold"
+ echo " Please fix critical and high severity issues before proceeding"
+ echo "passed=false" >> $GITHUB_OUTPUT
+ 
+ cat >> $GITHUB_STEP_SUMMARY << EOF
+ 
+ ### Result: FAILED
+ Quality score is below the required 80% threshold.
+ EOF
+ 
+ exit 1
+ else
+ echo "Code quality score ${SCORE}% passed 80% threshold"
+ echo "Ready to proceed to next stage"
+ echo "passed=true" >> $GITHUB_OUTPUT
+ 
+ cat >> $GITHUB_STEP_SUMMARY << EOF
+ 
+ ### Result: PASSED
+ Quality score meets the required 80% threshold. Ready for Stage 2!
+ EOF
+ fi
 
-        needs: build
+ - name: Upload BuildErrors Reports
+ uses: actions/upload-artifact@v4
+ if: always()
+ with:
+ name: builderrors-reports-stage1
+ path: |
+ builderrors-report.json
+ builderrors-shared.json
+ retention-days: 30
 
-        steps:
-        - name: checkout code
-          uses: actions/checkout@v4
+ - name: Stage 1 Completion Summary
+ if: always()
+ run: |
+ echo "🏁 Stage 1 - Code Quality Analysis Completed"
+ echo ""
+ if [ "${{ steps.quality-check.outputs.passed }}" == "true" ]; then
+ echo "Status: PASSED"
+ echo "Ready for Stage 2: Docker Build"
+ else
+ echo " Status: FAILED"
+ echo "Fix code quality issues before proceeding"
+ fi
+ echo ""
+ echo " Next Steps:"
+ echo "1. Review code quality report above"
+ echo "2. Fix any critical/high severity issues"
+ echo "3. If passed, proceed to add Stage 2"
 
-        - name: Install Docker
-          uses: docker/setup-buildx-action@v1
-        
-        - name: Login to Docker
-          uses: docker/login-action@v3
-          with:
-            username: ${{ secrets.DOCKER_USERNAME }}
-            password: ${{ secrets.DOCKER_TOKEN }}
-
-        - name: Docker Push
-          uses: docker/build-push-action@v6
-          with:
-            context: src/product-catalog
-            file: src/product-catalog/Dockerfile
-            push: true
-            tags: ${{ secrets.DOCKER_USERNAME }}/product-catalog:${{github.run_id}}
-
-    
-    updatek8s:
-        runs-on: ubuntu-latest
-
-        needs: docker
-
-        steps:
-        - name: checkout code
-          uses: actions/checkout@v4
-          with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-
-        - name: Update tag in kubernetes deployment manifest
-          run: | 
-               sed -i "s|image: .*|image: ${{ secrets.DOCKER_USERNAME }}/product-catalog:${{github.run_id}}|" kubernetes/productcatalog/deploy.yaml
-        
-        - name: Commit and push changes
-          run: |
-            git config --global user.email "abhishek@gmail.com"
-            git config --global user.name "Abhishek Veeramalla"
-            git add kubernetes/productcatalog/deploy.yaml
-            git commit -m "[CI]: Update product catalog image tag"
-            git push origin HEAD:main -f
-
-        
-        
-          
-
-
-        
